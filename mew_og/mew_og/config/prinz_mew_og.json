@@ -1,0 +1,41 @@
+{
+  "system": "prinz-potential",
+  "biased_model": "trained_models/toy/prinz-potential/biased-model/model.pth.tar",
+  "model_format": "oggm",
+  "n_training_samples": 10000,
+  "n_eval_samples": 10000,
+  "device": "cpu",
+  "gamma": 1e-3,
+  "outlier_threshold": 10.0,
+  "outlier_num_std": 3,
+  "optimization_kind": "bayesian-optimization",
+  "optimizer_kwargs": {
+    "n_calls": 256,
+    "threshold": 1e-5,
+    "n_best": 5,
+    "random_state": null,
+    "verbose": true
+  },
+  "params": {
+    "scaling_function._a": [1e-1, 1e1],
+    "scaling_function._b": [1e0, 2e1]
+  },
+  "scaling_function": "exponential",
+  "observable_functions": "gmm",
+  "observable_params": "results/prinz_pipeline/gmm_params.npy",
+  "reweighting_results": "results/prinz_pipeline/reweighting/reweighting-results.h5",
+  "gt_data": "results/prinz_pipeline/unbiased_prinz_samples.h5",
+  "gt_dataset": "trajectory",
+  "output_dir": "results/prinz_pipeline/mew_og",
+  "run": "0",
+  "beta_scheduler": "linear",
+  "beta_scheduler_kwargs": {
+    "a": 0.1,
+    "b": 20.0,
+    "n_steps": 100
+  },
+  "n_atoms": 1,
+  "n_dim": 1,
+  "dt": 0.01,
+  "probability_flow": false
+}

@@ -1,0 +1,17 @@
+{
+  "system": "prinz-potential",
+  "n_samples": 10000,
+  "device": "cpu",
+  "observable_functions": "gmm",
+  "observable_params": "results/prinz_pipeline/gmm_params.npy",
+  "output_dir": "results/prinz_pipeline/reweighting",
+  "max_iter": 50,
+  "ftol": 1e-10,
+  "beta_scheduler": "linear",
+  "beta_scheduler_kwargs": {
+    "beta_min": 0.1,
+    "beta_max": 20.0,
+    "n_steps": 100
+  }
+}
+

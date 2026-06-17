@@ -1,0 +1,41 @@
+{
+  "system": "prinz-potential",
+  "biased_model": "trained_models/toy/prinz-potential/biased-model/model.pth.tar",
+  "model_format": "oggm",
+  "n_training_samples": 1000,
+  "n_eval_samples": 10000,
+  "device": "cpu",
+  "gamma": 1e-4,
+  "outlier_threshold": 10.0,
+  "outlier_num_std": 3,
+  "optimization_kind": "bayesian-optimization",
+  "optimizer_kwargs": {
+    "n_calls": 50,
+    "threshold": 0.01,
+    "n_best": 2
+  },
+  "params": {
+    "_a": [0.1, 5.0],
+    "_b": [1.0, 20.0]
+  },
+  "scaling_function": "exponential",
+  "observable_functions": "gmm",
+  "observable_params": "gmm_params.npy",
+  "model_kwargs": {
+    "n_atoms": 1,
+    "dim": 1,
+    "time_embedding_dim": 3,
+    "hidden_dim": 64,
+    "out_dim": 1
+  },
+  "beta_scheduler": "linear",
+  "beta_scheduler_kwargs": {
+    "a": 0.1,
+    "b": 20.0,
+    "n_steps": 100
+  },
+  "n_atoms": 1,
+  "n_dim": 1,
+  "dt": 0.01,
+  "probability_flow": false
+}
