@@ -1,0 +1,43 @@
+{
+  "system": "homeodomain",
+  "device": "cuda",
+
+  "n_training_samples": 3500,
+  "batch_size": 700,
+  "n_evaluation_samples": 3500,
+
+  "scaling_function": "exponential",
+  "gamma": 1e-3,
+  "optimization_kind": "bayesian-optimization",
+
+  "params": {
+    "_b": [3, 20]
+  },
+
+  "optimizer_kwargs": {
+    "n_calls": 60,
+    "threshold": 1e-5,
+    "n_best": 5
+  },
+
+  "eval_frequency": 10,
+
+  "sequence": "homeodomain/msa.a3m",
+  "cache_embeds_dir": "homeodomain/embeddings",
+  "model_name": "bioemu-v1.1",
+
+  "denoiser_type": "dpm",
+  "denoiser": {
+    "eps_t": 0.001,
+    "max_t": 0.99,
+    "N": 30
+  },
+
+  "train_mew": false,
+
+  "manual_index": null,
+  "manual_lambda": null,
+
+  "output_root": "tmp/homeodomain",
+  "filter_samples": true
+}

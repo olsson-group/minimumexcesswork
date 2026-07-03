@@ -30,6 +30,11 @@ class StaticExperiment:
         Type of observable ('expectation' or 'functional').
     weighted_transformation : callable, optional
         Transformation applied to weighted observables.
+    lmbda : torch.Tensor, optional
+        Precomputed reweighting Lagrange multiplier for this observable
+        (used by the BioEmu protein benchmark).
+    resid : int, optional
+        Residue index this observable is associated with (protein benchmarks).
     """
 
     observables_exp: torch.Tensor
@@ -39,6 +44,8 @@ class StaticExperiment:
     name: str = "experiment"
     kind: str = "expectation"
     weighted_transformation: Optional[Callable] = None
+    lmbda: Optional[torch.Tensor] = None
+    resid: Optional[int] = None
 
     def __post_init__(self):
         """Ensure tensors are properly formatted."""
@@ -50,6 +57,8 @@ class StaticExperiment:
             )
         if self.observables_msm is not None and not isinstance(self.observables_msm, torch.Tensor):
             self.observables_msm = torch.tensor(self.observables_msm, dtype=torch.float32)
+        if self.lmbda is not None and not isinstance(self.lmbda, torch.Tensor):
+            self.lmbda = torch.tensor(self.lmbda, dtype=torch.float32)
 
         # Ensure at least 1D
         if self.observables_exp.dim() == 0:

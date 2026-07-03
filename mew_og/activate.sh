@@ -27,7 +27,7 @@ function _mew_og_find_python() {
     return
   fi
 
-  for candidate in python3.11 python3.10 python3.9; do
+  for candidate in python3.13 python3.12 python3.11 python3.10 python3.9 python3; do
     if command -v "${candidate}" >/dev/null 2>&1; then
       echo "${candidate}"
       return
@@ -41,20 +41,20 @@ function _mew_og_python_ok() {
   local python_bin="$1"
   "${python_bin}" - <<'PY'
 import sys
-raise SystemExit(0 if (3, 9) <= sys.version_info < (3, 12) else 1)
+raise SystemExit(0 if sys.version_info >= (3, 9) else 1)
 PY
 }
 
 function _mew_og_create_venv() {
   local python_bin
   python_bin="$(_mew_og_find_python)" || {
-    echo "No Python 3.9-3.11 candidate found. Set MEW_OG_PYTHON=/path/to/python." >&2
+    echo "No Python >=3.9 candidate found. Set MEW_OG_PYTHON=/path/to/python." >&2
     return 1
   }
 
   if ! _mew_og_python_ok "${python_bin}"; then
-    echo "Python '${python_bin}' is outside MEW-OG's requirement (>=3.9,<3.12)." >&2
-    echo "Set MEW_OG_PYTHON=/path/to/python3.9-3.11 and source this script again." >&2
+    echo "Python '${python_bin}' is below MEW-OG's requirement (>=3.9)." >&2
+    echo "Set MEW_OG_PYTHON=/path/to/python3.9+ and source this script again." >&2
     return 1
   fi
 

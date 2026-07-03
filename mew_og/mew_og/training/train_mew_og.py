@@ -1,5 +1,6 @@
 """MEW-OG trainer for observable-guided sampling."""
 
+import warnings
 from pathlib import Path
 from typing import List, Optional, Union
 
@@ -117,46 +118,47 @@ class MewOGTrainer:
         n_best: int = 2,
         **kwargs,
     ) -> dict:
-        """
-        Train using Bayesian optimization.
+        """Train using scikit-optimize Gaussian-process Bayesian optimization."""
+        try:
+            from skopt import gp_minimize
+            from skopt.callbacks import DeltaYStopper
+        except ImportError as exc:
+            warnings.warn(
+                "scikit-optimize (skopt) is not installed; falling back to grid "
+                f"search instead of Bayesian optimization. ({exc})",
+                stacklevel=2,
+            )
+            return self._train_grid_search(**kwargs)
 
-        Note: This is a simplified grid search fallback if skopt is not available.
-        """
-        # Initialize parameter space
-        param_space = self._initialize_parameters()
+        parameter_space = self._initialize_bo_parameter_space()
+        random_state = kwargs.pop("random_state", seed)
+        stopper = DeltaYStopper(delta=threshold, n_best=n_best)
 
-        best_loss = np.inf
-        best_params = None
+        print("Running Bayesian optimization...")
+        try:
+            result = gp_minimize(
+                self._objective,
+                parameter_space,
+                n_calls=n_calls,
+                random_state=random_state,
+                callback=stopper,
+                **kwargs,
+            )
+        except Exception as exc:
+            warnings.warn(
+                "Bayesian optimization with scikit-optimize failed; falling back "
+                f"to grid search. ({exc})",
+                stacklevel=2,
+            )
+            return self._train_grid_search(**kwargs)
 
-        print(f"Running optimization with {n_calls} iterations...")
-
-        for i in range(n_calls):
-            # Random sample from parameter space
-            params = []
-            for bounds in param_space:
-                val = np.random.uniform(bounds[0], bounds[1])
-                params.append(val)
-
-            # Evaluate
-            loss = self._objective(params)
-
-            if loss < best_loss:
-                best_loss = loss
-                best_params = params.copy()
-                print(f"  Iteration {i + 1}: New best loss = {loss:.6f}")
-
-            if loss < threshold:
-                print(f"  Converged at iteration {i + 1}")
-                break
-
-        # Set best parameters
-        if best_params is not None:
-            self._update_parameters(best_params)
+        self._update_parameters(result.x)
+        self._print_parameters(len(result.x_iters), result.fun)
 
         return {
-            "best_params": best_params,
-            "best_loss": best_loss,
-            "n_iterations": i + 1,
+            "best_params": result.x,
+            "best_loss": result.fun,
+            "n_iterations": len(result.x_iters),
         }
 
     def _train_minimize(self, **kwargs) -> dict:
@@ -233,6 +235,49 @@ class MewOGTrainer:
 
         return param_space
 
+    def _initialize_bo_parameter_space(self) -> list:
+        """
+        Build a scikit-optimize search space for Bayesian optimization.
+
+        Returns
+        -------
+        list of skopt.space.Real
+            One ``Real`` dimension per scaling-function parameter.
+        """
+        from skopt.space import Real
+
+        parameter_space = []
+        self.param_names = []
+
+        for param_name, bounds in self.param_bounds.items():
+            param_type = param_name.split(".")[-1] if "." in param_name else param_name
+            for i in range(len(self.model.augmenter.scaling_function)):
+                unique_param_name = f"{param_type}{i}"
+                parameter_space.append(
+                    Real(low=bounds[0], high=bounds[1], name=unique_param_name)
+                )
+                self.param_names.append(unique_param_name)
+
+        return parameter_space
+
+    def _print_parameters(self, iteration, loss) -> None:
+        """Print optimized scaling-function parameters."""
+        print(f"--------------------\nIteration: {iteration}\nAverage Loss: {loss:5f}")
+        param_values = {}
+        for param_name in self.param_names:
+            base_param_name = "".join(c for c in param_name if not c.isdigit())
+            index = int("".join(c for c in param_name if c.isdigit()))
+            sf = self.model.augmenter.scaling_function[index]
+            param_tensor = getattr(sf, base_param_name, None)
+            if param_tensor is None and not base_param_name.startswith("_"):
+                param_tensor = getattr(sf, f"_{base_param_name}", None)
+            if param_tensor is not None:
+                value = param_tensor.detach().item()
+                param_values.setdefault(base_param_name, []).append(value)
+        for param, values in param_values.items():
+            print(f"{param}: {[round(v, 4) for v in values]}")
+        print("--------------------")
+
     def _update_parameters(self, params: List[float]) -> None:
         """
         Update scaling function parameters.
@@ -246,13 +291,13 @@ class MewOGTrainer:
 
         with torch.no_grad():
             for param_name, value in param_dict.items():
-                # Extract base name and index
-                base_name = "".join(c for c in param_name if not c.isdigit())
-                idx = int("".join(c for c in param_name if c.isdigit()))
+                base_param_name = "".join(c for c in param_name if not c.isdigit())
+                index = int("".join(c for c in param_name if c.isdigit()))
 
-                # Set parameter
-                sf = self.model.augmenter.scaling_function[idx]
-                param_tensor = getattr(sf, f"_{base_name}", None)
+                sf = self.model.augmenter.scaling_function[index]
+                param_tensor = getattr(sf, base_param_name, None)
+                if param_tensor is None and not base_param_name.startswith("_"):
+                    param_tensor = getattr(sf, f"_{base_param_name}", None)
                 if param_tensor is not None:
                     param_tensor.copy_(torch.tensor([value]))
 

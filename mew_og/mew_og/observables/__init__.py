@@ -7,6 +7,12 @@ from mew_og.observables.gmm import (
     load_gmm_params,
 )
 from mew_og.observables.base import ObservableBase, PolynomialObservable
+from mew_og.observables.nmr import (
+    ThreeJHNHA,
+    backbone_phi,
+    compute_dihedral,
+    calculate_quality_factor,
+)
 
 __all__ = [
     "GaussianMixtureObservable",
@@ -15,5 +21,9 @@ __all__ = [
     "load_gmm_params",
     "ObservableBase",
     "PolynomialObservable",
+    "ThreeJHNHA",
+    "backbone_phi",
+    "compute_dihedral",
+    "calculate_quality_factor",
 ]
 
