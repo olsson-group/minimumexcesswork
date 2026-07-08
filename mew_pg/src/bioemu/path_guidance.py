@@ -1,0 +1,276 @@
+from pathlib import Path
+
+import numpy as np
+import torch
+
+from .denoiser import forward_probability_flow_trajectory
+from .model_utils import load_model, load_sdes, maybe_download_checkpoint
+from .sample_utils import (
+    build_chemgraph,
+    reshape_positions,
+    reshape_orientations,
+    plot_bond_distance_histograms,
+    guided_reverse_integration,
+    load_initial_structure,
+)
+from .transition_states import TransitionClassifier
+
+import functools
+from skopt import gp_minimize
+from skopt.space import Real, Integer, Categorical
+
+import os
+
+
+def _configure_determinism() -> None:
+    """Enable fully deterministic PyTorch execution.
+
+    Called once inside main() so importing this module has no global side effects.
+    Required for reproducible guidance trajectories; carries a small performance cost.
+    """
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+    torch.use_deterministic_algorithms(True)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+
+
+def run_gp_optimization(gamma, guiding_pos, guiding_rot, context, sdes, score_model, N, eps_t, max_t, method, device, sequence_length, batch_size, n_calls, feat_ref_npz):
+
+    transition_classifier = TransitionClassifier(
+        npz_path=feat_ref_npz,
+    )
+
+    print("start optimization")
+    gp_optimization_function = functools.partial(
+        optimization_function,
+        guiding_pos=guiding_pos,
+        guiding_rot=guiding_rot,
+        context=context,
+        sdes=sdes,
+        score_model=score_model,
+        N=N,
+        eps_t=eps_t,
+        max_t=max_t,
+        method=method,
+        device=device,
+        sequence_length=sequence_length,
+        batch_size=batch_size,
+        gamma=gamma,
+        transition_classifier=transition_classifier,
+    )
+
+    alpha_s_grid = [0.5 * i for i in range(1, 11)]
+    result = gp_minimize(
+        gp_optimization_function,
+        [
+            Categorical(alpha_s_grid, name="alpha_s"),
+            Integer(5, 20, name="kappa_s"),
+            Real(0.25, 0.75, name="beta_s"),
+            Real(0.1, 1.5, name="alpha_b"),
+            Integer(5, 20, name="kappa_b"),
+            Real(0.25, 0.75, name="beta_b"),
+            Categorical(alpha_s_grid, name="alpha_s_r"),
+            Integer(5, 20, name="kappa_s_r"),
+            Real(0.25, 0.75, name="beta_s_r"),
+            Real(0.1, 1.5, name="alpha_b_r"),
+            Integer(5, 20, name="kappa_b_r"),
+            Real(0.25, 0.75, name="beta_b_r"),
+        ],
+        # [
+        #     Real(2.0, 3.0, name="alpha_s"),
+        #     Real(0.2, 0.75, name="kappa_s"),
+        #     Real(0.0, 0.25, name="beta_s"),
+        #     Real(0.25, 1.0, name="alpha_b"),
+        #     Real(0.2, 0.75, name="kappa_b"),
+        #     Real(0.5, 1.5, name="beta_b"),
+        # ],
+        n_calls=n_calls,
+        verbose=True,
+    )
+    return result
+
+
+def optimization_function(
+    params,
+    guiding_pos,
+    guiding_rot,
+    context,
+    sdes,
+    score_model,
+    N,
+    eps_t,
+    max_t,
+    method,
+    device,
+    sequence_length,
+    batch_size,
+    gamma,
+    transition_classifier,
+):
+
+    # Reverse PF-ODE
+    sampled_positions, sampled_orientations, t_b, excess_work = guided_reverse_integration(
+        guiding_positions=guiding_pos,
+        guiding_orientations=guiding_rot,
+        context=context,
+        sdes=sdes,
+        score_model=score_model,
+        N=N,
+        eps_t=eps_t,
+        max_t=max_t,
+        method=method,
+        device=device,
+        sequence_length=sequence_length,
+        batch_size=batch_size,
+        params=params,
+    )
+
+    pos_rec = reshape_positions(sampled_positions[-1].detach().cpu(), batch_size, sequence_length)
+    R_rec = reshape_orientations(sampled_orientations[-1].detach().cpu(), batch_size, sequence_length)
+
+    print(pos_rec.shape, R_rec.shape)
+
+    # cehck if tensor has nan or inf values
+    if torch.isnan(pos_rec).any() or torch.isinf(pos_rec).any() or torch.isnan(R_rec).any() or torch.isinf(R_rec).any():
+        print("nan or inf values in pos_rec or R_rec")
+        return 2
+
+    result = transition_classifier.classify(
+        new_ca_positions=pos_rec,
+        new_node_orientations=R_rec,
+    )
+    guiding_score = np.mean(result["is_transition"])
+    excess_work = gamma * (1 / N) * 0.5 * (excess_work["pos"].item() + excess_work["node_orientations"].item())
+    if not 0 < excess_work < 1:
+        excess_work = 1
+    print(f"guiding_score: {guiding_score}, excess_work: {excess_work}")
+    return (1 - guiding_score) + excess_work
+
+
+@torch.no_grad()
+def main(
+    sequence: str | Path,
+    init_npz: str | Path,
+    feat_ref_npz: str | Path,
+    batch_size: int = 64,
+    N: int = 200,
+    eps_t: float = 1e-3,
+    max_t: float = 1.0,
+    method: str = "euler",
+    model_name: str | None = "bioemu-v1.1",
+    ckpt_path: str | Path | None = None,
+    model_config_path: str | Path | None = None,
+    cache_so3_dir: str | Path | None = None,
+    n_calls: int = 10,
+    gamma: float = 1.0,
+    save_dir: str | Path = "path_guidance_samples",
+    seed: int | None = None,
+) -> None:
+    """
+    Deterministic probability-flow roundtrip check using the trained score model:
+    - Forward PF-ODE from eps_t -> max_t
+    - Reverse PF-ODE from max_t -> eps_t
+    Then compare to initial structure.
+    """
+
+    _configure_determinism()
+    print(f"Start path guidance with gamma={gamma} batch_size={batch_size} N={N} eps_t={eps_t} max_t={max_t} method={method}")
+    pos0, R0, sequence = load_initial_structure(init_npz, sequence)
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    sequence_length = len(sequence)
+
+    # Resolve model and SDEs
+    ckpt_path, model_config_path = maybe_download_checkpoint(
+        model_name=model_name, ckpt_path=ckpt_path, model_config_path=model_config_path
+    )
+    score_model = load_model(ckpt_path, model_config_path)
+    score_model.eval()
+    sdes = load_sdes(model_config_path=model_config_path, cache_so3_dir=cache_so3_dir)
+
+    context, batch = build_chemgraph(sequence, pos0, R0)
+    # Forward PF-ODE (deterministic)
+    guiding_pos, guiding_rot, _ = forward_probability_flow_trajectory(
+        sdes=sdes,
+        batch=batch,
+        score_model=score_model,
+        N=N,
+        eps_t=eps_t,
+        max_t=max_t,
+        device=device,
+        method=method,
+    )
+
+    result = run_gp_optimization(
+        gamma=gamma,
+        guiding_pos=guiding_pos,
+        guiding_rot=guiding_rot,
+        context=context,
+        sdes=sdes,
+        score_model=score_model,
+        N=N,
+        eps_t=eps_t,
+        max_t=max_t,
+        method=method,
+        device=device,
+        sequence_length=sequence_length,
+        batch_size=batch_size,
+        n_calls=n_calls,
+        feat_ref_npz=feat_ref_npz,
+    )
+
+    save_dir = f"{save_dir}/{gamma}_{batch_size}_{N}_{eps_t}_{max_t}_{method}_{n_calls}_{seed}"
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
+
+    # save result.x to txt file
+    with open(f"{save_dir}/params.txt", "w") as f:
+        f.write(str(result.x))
+
+    sampled_positions, sampled_orientations, t_b, excess_work = guided_reverse_integration(
+        guiding_positions=guiding_pos,
+        guiding_orientations=guiding_rot,
+        context=context,
+        sdes=sdes,
+        score_model=score_model,
+        N=N,
+        eps_t=eps_t,
+        max_t=max_t,
+        method=method,
+        device=device,
+        sequence_length=sequence_length,
+        batch_size=batch_size,
+        params=result.x,
+        seed=seed,
+    )
+
+    np.savez(
+        f"{save_dir}/samples.npz",
+        pos=sampled_positions[-1].detach().cpu().numpy(),
+        node_orientations=sampled_orientations[-1].detach().cpu().numpy(),
+    )
+
+    transition_classifier = TransitionClassifier(
+        npz_path=feat_ref_npz,
+    )
+
+    pos_rec = reshape_positions(sampled_positions[-1].detach().cpu(), batch_size, sequence_length)
+    R_rec = reshape_orientations(sampled_orientations[-1].detach().cpu(), 1000, sequence_length)
+
+    result = transition_classifier.classify(
+        new_ca_positions=pos_rec,
+        new_node_orientations=R_rec,
+    )
+    guiding_score = np.mean(result["is_transition"])
+
+    # save result to txt file
+    with open(f"{save_dir}/transition_classifier_result.txt", "w") as f:
+        f.write(str(guiding_score))
+
+
+if __name__ == "__main__":
+    import logging as _logging
+    import fire as _fire
+
+    _logging.basicConfig(level=_logging.INFO)
+    _fire.Fire(main)
