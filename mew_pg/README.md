@@ -1,8 +1,3 @@
-
-<p align="center">
-  <img src="assets/emu.png" alt="BioEmu logo" width="200"/>
-</p>
-
 # Path Guidance for BioEmu
 
 **Minimum Excess Work Guidance for Score-Based Sampling with Experimental Data or Sparse Restraints**
@@ -10,18 +5,6 @@
 This repository extends [BioEmu](https://github.com/microsoft/bioemu) with *path guidance* — a method that steers the BioEmu diffusion process toward conformational transition states while penalising solutions that require large deviations from the unguided trajectory.
 
 > **Relationship to BioEmu.** The core generative model, SDE definitions, denoiser, and sampling infrastructure are taken directly from the [BioEmu repository](https://github.com/microsoft/bioemu) with minor modifications. This repository adds the guidance layer on top.
-
----
-
-## Overview
-
-Standard BioEmu samples from the equilibrium ensemble of a protein. Path guidance biases sampling toward a user-defined target region (here: conformational transition states) by:
-
-1. Running a **forward probability-flow ODE** from a set of seed structures to obtain reference trajectories.
-2. Optimising **guidance parameters** via Bayesian (GP) optimisation such that the reverse ODE / SDE produces structures that (a) are classified as transition states and (b) incur minimal excess work relative to the unguided path.
-3. Drawing a large batch of samples with the best-found parameters.
-
-Transition-state membership is determined by a classifier built from reference MD data: torsion-angle features → TICA → KMeans micro-states → MSM → PCCA macro-states → committor probability.
 
 ---
 
@@ -81,7 +64,7 @@ np.savez("feat_ref.npz", feat_ref=feat_ref)
 
 ### `init.npz` — seed structures
 
-The guidance optimisation starts from an initial set of structures. These should be structures in (or near) the region of interest. The file must contain arrays under the keys `pos` (nm) and `node_orientations`.
+The guidance optimisation starts from an initial set of structures. These should be structures in (or near) the region of interest. The file must contain arrays under the keys `pos` (nm) and `node_orientations`. The Transition-state membership is determined by a classifier built from reference MD data
 
 ---
 
